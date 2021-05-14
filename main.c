@@ -1,7 +1,11 @@
+#define _XOPEN_SOURCE 500
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+
+#include <unistd.h>
 
 #define GLEW_STATIC
 #include <GL/glew.h>
@@ -17,7 +21,7 @@
 const char *vert_shader_source =
     "#version 330 core\n"
     "\n"
-    "#define PARTICLE_SIZE 8.0\n"
+    "#define PARTICLE_SIZE 1.0\n"
     "\n"
     "uniform vec2 resolution;\n"
     "\n"
@@ -27,7 +31,7 @@ const char *vert_shader_source =
     "out vec3 particle_color;\n"
     "\n"
     "vec2 screen_to_ndc(vec2 pos) {\n"
-    "    return pos / resolution * 2.0;\n"
+    "    return (pos - resolution * 0.5) / (resolution * 0.5);\n"
     "}\n"
     "\n"
     "void main() {\n"
@@ -35,7 +39,7 @@ const char *vert_shader_source =
     "        float(gl_VertexID & 1),\n"
     "        float((gl_VertexID >> 1) & 1));\n"
     "    gl_Position = vec4(\n"
-    "       screen_to_ndc(position + (2.0 * uv  - vec2(1.0, 1.0)) * PARTICLE_SIZE),\n"
+    "       screen_to_ndc(position + uv * PARTICLE_SIZE),\n"
     "       0.0,\n"
     "       1.0);\n"
     "    particle_color = color;\n"
@@ -176,7 +180,7 @@ typedef struct {
     GLfloat b;
 } Vert;
 
-#define VERTS_CAPACITY 1024
+#define VERTS_CAPACITY (16 * 1024)
 Vert verts[VERTS_CAPACITY];
 size_t verts_count = 0;
 
@@ -264,13 +268,13 @@ typedef struct {
 #define PARTICLES_CAPACITY VERTS_CAPACITY
 Particle particles[PARTICLES_CAPACITY] = {0};
 size_t particles_count = 0;
-#define GRID_RES 64
+#define GRID_RES 512
 Cell grid[GRID_RES][GRID_RES] = {0};
 
 void mpm_start(void)
 {
     const float spacing = 1.0f;
-    const int box_x = 16, box_y = 16;
+    const int box_x = 128, box_y = 128;
     const float sx = GRID_RES / 2.0f, sy = GRID_RES / 2.0f;
 
     for (float i = sx - box_x / 2; i < sx + box_x / 2; i += spacing) {
@@ -291,7 +295,7 @@ void mpm_start(void)
 // dt = the time step of our simulation. the stability of your simulation is going to be limited by how much a particle can
 // move in a single time step, and it's a good rule of thumb to choose dt so that no
 // particle could move more than 1 grid-cell in a single step. (this would lead to particle tunneling, or other very unstable behaviour)
-const float dt = 1.0f;
+const float dt = 0.000001f;
 
 const float gravity = -0.05f;
 
@@ -508,11 +512,13 @@ int main()
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     while (!glfwWindowShouldClose(window)) {
+        mpm_simulate();
+
         begin_verts();
         {
-            vert( -100.0,  -100.0, 1.0, 0.0, 0.0);
-            vert( 0.0,  0.0, 0.0, 1.0, 0.0);
-            vert(100.0, 100.0, 0.0, 0.0, 1.0);
+            for (size_t i = 0; i < particles_count; ++i) {
+                vert(particles[i].x.x, particles[i].x.y, 1.0, 0.0, 0.0);
+            }
         }
         end_verts();
 
@@ -526,6 +532,8 @@ int main()
 
         glfwSwapBuffers(window);
         glfwPollEvents();
+
+        usleep(1000000 / 60);
     }
 
     return 0;
