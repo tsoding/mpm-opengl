@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -7,6 +8,8 @@
 
 #define GL_GLEXT_PROTOTYPES
 #include <GLFW/glfw3.h>
+
+#include "./la.h"
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
@@ -215,6 +218,7 @@ void init_buffers(void)
 
 void vert(float x, float y, float r, float g, float b)
 {
+    assert(verts_count < VERTS_CAPACITY);
     verts[verts_count].x = x;
     verts[verts_count].y = y;
     verts[verts_count].r = r;
@@ -237,6 +241,219 @@ void end_verts(void)
         0,
         verts_count * sizeof(verts[0]),
         verts);
+}
+
+float rand_float(void)
+{
+    return (float) rand() / (float) RAND_MAX;
+}
+
+typedef struct {
+    Vec2 x;                     // position
+    Vec2 v;                     // velocity
+    float mass;
+    float padding;
+} Particle;
+
+typedef struct {
+    Vec2 v;
+    float mass;
+    float padding;
+} Cell;
+
+#define PARTICLES_CAPACITY VERTS_CAPACITY
+Particle particles[PARTICLES_CAPACITY] = {0};
+size_t particles_count = 0;
+#define GRID_RES 64
+Cell grid[GRID_RES][GRID_RES] = {0};
+
+void mpm_start(void)
+{
+    const float spacing = 1.0f;
+    const int box_x = 16, box_y = 16;
+    const float sx = GRID_RES / 2.0f, sy = GRID_RES / 2.0f;
+
+    for (float i = sx - box_x / 2; i < sx + box_x / 2; i += spacing) {
+        for (float j = sy - box_y / 2; j < sy + box_y / 2; j += spacing) {
+            assert(particles_count < PARTICLES_CAPACITY);
+            particles[particles_count].x = vec2(i, j);
+            particles[particles_count].v =
+                vec2_mul(
+                    vec2(rand_float() - 0.5f,
+                         rand_float() - 0.5f + 2.75f),
+                    vec2s(0.5f));
+            particles[particles_count].mass = 1.0f;
+            particles_count += 1;
+        }
+    }
+}
+
+// dt = the time step of our simulation. the stability of your simulation is going to be limited by how much a particle can
+// move in a single time step, and it's a good rule of thumb to choose dt so that no
+// particle could move more than 1 grid-cell in a single step. (this would lead to particle tunneling, or other very unstable behaviour)
+const float dt = 1.0f;
+
+const float gravity = -0.05f;
+
+void mpm_simulate(void)
+{
+    Vec2 weights[3] = {0};
+
+    // reset grid scratchpad
+    for (size_t i = 0; i < GRID_RES; ++i) {
+        for (size_t j = 0; j < GRID_RES; ++j) {
+            grid[i][j].mass = 0;
+            grid[i][j].v = vec2(0.0f, 0.0f);
+        }
+    }
+
+    // P2G
+    for (size_t i = 0; i < particles_count; ++i) {
+        Particle p = particles[i];
+
+        // quadratic interpolation weights
+        // uint2 cell_idx = (uint2)p.x;
+        iVec2 cell_idx = ivec2_from_vec2(p.x);
+        // float2 cell_diff = (p.x - cell_idx) - 0.5f;
+        Vec2 cell_diff =
+            vec2_sub(
+                vec2_sub(p.x, vec2_from_ivec2(cell_idx)),
+                vec2(0.5f, 0.5f));
+        // weights[0] = 0.5f * math.pow(0.5f - cell_diff, 2);
+        weights[0] =
+            vec2_mul(
+                vec2s(0.5f),
+                vec2_pow(
+                    vec2_sub(vec2s(0.5f), cell_diff),
+                    vec2s(2.0f)));
+        // weights[1] = 0.75f - math.pow(cell_diff, 2);
+        weights[1] =
+            vec2_sub(
+                vec2s(0.75f),
+                vec2_pow(cell_diff, vec2s(2)));
+        // weights[2] = 0.5f * math.pow(0.5f + cell_diff, 2);
+        weights[2] =
+            vec2_pow(
+                vec2s(0.5f),
+                vec2_pow(
+                    vec2_add(vec2s(0.5f), cell_diff),
+                    vec2s(2)));
+
+        for (int gx = 0; gx < 3; ++gx) {
+            for (int gy = 0; gy < 3; ++gy) {
+                float weight = weights[gx].x * weights[gy].y;
+
+                // uint2 cell_x = math.uint2(cell_idx.x + gx - 1, cell_idx.y + gy - 1);
+                iVec2 cell_x = ivec2(cell_idx.x + gx - 1, cell_idx.y + gy - 1);
+                // float2 cell_dist = (cell_x - p.x) + 0.5f;
+                // Vec2 cell_dist =
+                //     vec2_add(
+                //         vec2_sub(vec2_from_ivec2(cell_x), p.x),
+                //         vec2s(0.5f));
+                // float2 Q = math.mul(p.C, cell_dist);
+                // ^ ignored
+
+                // MPM course, equation 172
+                // float mass_contrib = weight * p.mass;
+                float mass_contrib = weight * p.mass;
+
+                // converting 2D index to 1D
+                Cell cell = grid[cell_x.x][cell_x.y];
+                cell.mass += mass_contrib;
+
+                // cell.v += mass_contrib * (p.v + Q);
+                cell.v = vec2_add(cell.v, vec2_mul(vec2s(mass_contrib), p.v));
+
+                grid[cell_x.x][cell_x.y] = cell;
+            }
+        }
+    }
+
+    // grid velocity update
+    for (int gx = 0; gx < GRID_RES; ++gx) {
+        for (int gy = 0; gy < GRID_RES; ++gy) {
+            Cell cell = grid[gx][gy];
+            if (cell.mass > 0) {
+                // convert momentum to velocity, apply gravity
+                // cell.v /= cell.mass;
+                cell.v = vec2_div(cell.v, vec2s(cell.mass));
+                // cell.v += dt * math.float2(0, gravity);
+                cell.v =
+                    vec2_add(
+                        cell.v,
+                        vec2_mul(vec2s(dt), vec2(0.0f, gravity)));
+
+                if (gx < 2 || gx > GRID_RES - 3) {
+                    cell.v.x = 0;
+                }
+
+                if (gy < 2 || gy > GRID_RES - 3) {
+                    cell.v.y = 0;
+                }
+
+                grid[gx][gy] = cell;
+            }
+        }
+    }
+
+    // G2P
+    for (size_t i = 0; i < particles_count; ++i) {
+        Particle p = particles[i];
+
+        // reset particle velocity. we calculate it from scratch each step using the grid
+        // p.v = 0;
+        p.v = vec2s(0.0f);
+
+        // quadratic interpolation weights
+        // uint2 cell_idx = (uint2)p.x;
+        iVec2 cell_idx = ivec2_from_vec2(p.x);
+        // float2 cell_diff = (p.x - cell_idx) - 0.5f;
+        Vec2 cell_diff =
+            vec2_sub(
+                vec2_sub(p.x, vec2_from_ivec2(cell_idx)),
+                vec2(0.5f, 0.5f));
+        // weights[0] = 0.5f * math.pow(0.5f - cell_diff, 2);
+        weights[0] =
+            vec2_mul(
+                vec2s(0.5f),
+                vec2_pow(
+                    vec2_sub(vec2s(0.5f), cell_diff),
+                    vec2s(2.0f)));
+        // weights[1] = 0.75f - math.pow(cell_diff, 2);
+        weights[1] =
+            vec2_sub(
+                vec2s(0.75f),
+                vec2_pow(cell_diff, vec2s(2)));
+        // weights[2] = 0.5f * math.pow(0.5f + cell_diff, 2);
+        weights[2] =
+            vec2_pow(
+                vec2s(0.5f),
+                vec2_pow(
+                    vec2_add(vec2s(0.5f), cell_diff),
+                    vec2s(2)));
+
+        for (int gx = 0; gx < 3; ++gx) {
+            for (int gy = 0; gy < 3; ++gy) {
+                float weight = weights[gx].x * weights[gy].y;
+                // uint2 cell_x = math.uint2(cell_idx.x + gx - 1, cell_idx.y + gy - 1);
+                iVec2 cell_x = ivec2(cell_idx.x + gx - 1, cell_idx.y + gy - 1);
+
+                Vec2 weighted_velocity =
+                    vec2_mul(
+                        grid[cell_x.x][cell_x.y].v,
+                        vec2s(weight));
+
+                p.v = vec2_add(p.v, weighted_velocity);
+            }
+        }
+
+        p.x = vec2_add(p.x, vec2_mul(p.v, vec2s(dt)));
+
+        // p.x = math.clamp(p.x, 1, grid_res - 2);
+        p.x = vec2_clamp(p.x, vec2s(1), vec2s(GRID_RES - 2));
+
+        particles[i] = p;
+    }
 }
 
 int main()
@@ -286,6 +503,8 @@ int main()
     init_buffers();
 
     glUniform2f(resolutionUniform, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    mpm_start();
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     while (!glfwWindowShouldClose(window)) {
