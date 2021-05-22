@@ -430,7 +430,7 @@ void mpm_simulate(void)
                 vec2_pow(cell_diff, vec2s(2)));
         // weights[2] = 0.5f * math.pow(0.5f + cell_diff, 2);
         weights[2] =
-            vec2_pow(
+            vec2_mul(
                 vec2s(0.5f),
                 vec2_pow(
                     vec2_add(vec2s(0.5f), cell_diff),
