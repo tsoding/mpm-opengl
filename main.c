@@ -295,7 +295,7 @@ void mpm_start(void)
 // dt = the time step of our simulation. the stability of your simulation is going to be limited by how much a particle can
 // move in a single time step, and it's a good rule of thumb to choose dt so that no
 // particle could move more than 1 grid-cell in a single step. (this would lead to particle tunneling, or other very unstable behaviour)
-const float dt = 0.000001f;
+const float dt = 1.0f;
 
 const float gravity = -0.05f;
 
